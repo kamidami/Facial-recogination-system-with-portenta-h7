@@ -1,0 +1,81 @@
+import sensor, time, image, os, tf, lcd
+import utime
+
+# Reset sensor
+sensor.reset()
+
+# Sensor settings
+sensor.set_contrast(3)
+sensor.set_gainceiling(16)
+sensor.set_framesize(sensor.HQVGA)
+sensor.set_pixformat(sensor.GRAYSCALE)
+
+# Load Haar Cascade for face detection
+face_cascade = image.HaarCascade("frontalface", stages=25)
+
+# Load TensorFlow Lite model and labels for object classification
+net = "trained.tflite"
+labels = [line.rstrip('\n') for line in open("/labels.txt")]
+
+# Timezone offset (in seconds)
+timezone_offset = 18000  # UTC+5:00
+
+# FPS clock
+clock = time.clock()
+
+while True:
+    clock.tick()
+
+    # Capture snapshot
+    img = sensor.snapshot()
+
+    # Face detection
+    faces = img.find_features(face_cascade, threshold=0.75, scale_factor=1.25)
+
+    # Process detected faces
+    for face in faces:
+        # Draw face rectangle
+        img.draw_rectangle(face)
+
+        # Crop the face region for classification
+        face_img = img.crop(face)
+
+        # Perform classification on the face image
+        for obj in tf.classify(net, face_img, min_scale=1.0, scale_mul=0.8, x_overlap=0.5, y_overlap=0.5):
+            print("**********\nPredictions at [x=%d,y=%d,w=%d,h=%d]" % obj.rect())
+            face_img.draw_rectangle(obj.rect())
+            predictions_list = list(zip(labels, obj.output()))
+            for i in range(len(predictions_list)):
+                confidence = predictions_list[i][1]
+                label = predictions_list[i][0]
+                print("%s = %f" % (label, confidence))
+                if confidence > 0.98 and label != "unknown":
+                    if label == "background":
+                        continue  # Skip saving for background class
+
+                    print("It's a", label, "!")
+                    with open('/sd/predictions.csv', 'a') as f:
+                        f.write(label + '\n')
+                    utc_time = utime.localtime()  # Get UTC time
+                    local_time = utime.mktime(utc_time) + timezone_offset  # Adjust for timezone offset
+                    hours = int(local_time // 3600) % 24
+                    minutes = int(local_time // 60) % 60
+                    seconds = int(local_time % 60)
+                    timestamp = "{:02d}_{:02d}_{:02d}".format(hours, minutes, seconds)
+                    filename = "/sd/prediction_{}_{}.jpg".format(label, timestamp)
+                   
+                    # Store the prediction data with timestamp
+                    with open('/sd/predictions.csv', 'a') as f:
+                        f.write("{},{},{}\n".format(label, confidence, timestamp))
+
+                    # Save the image frame with prediction name as the filename
+                    img.save(filename)
+
+                    # Go into sleep mode
+                    utime.sleep(1)  # Sleep for 10 seconds
+
+    # Display the result on LCD
+    lcd.display(img)
+
+    # Print FPS
+    print(clock.fps())
